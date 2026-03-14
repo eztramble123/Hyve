@@ -14,6 +14,11 @@
     "react-dom": "19.2.3",
     "xrpl": "^4.6.0"
   },
+  "optionalDependencies": {
+    "@tailwindcss/oxide-win32-x64-msvc": "*",
+    "@tailwindcss/oxide-darwin-arm64": "*",
+    "@tailwindcss/oxide-darwin-x64": "*"
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",

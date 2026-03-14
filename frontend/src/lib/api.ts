@@ -43,11 +43,12 @@ export const api = {
     vaultId: string,
     employeeAddress: string,
     employeeSeed: string,
-    amount: number
+    amount: number,
+    tier?: string
   ) =>
     request(`/vault/${vaultId}/loan/draw`, {
       method: "POST",
-      body: JSON.stringify({ employeeAddress, employeeSeed, amount }),
+      body: JSON.stringify({ employeeAddress, employeeSeed, amount, ...(tier && { tier }) }),
     }),
 
   repayLoan: (
@@ -74,6 +75,12 @@ export const api = {
     }),
 
   getBalance: (address: string) => request(`/balance/${address}`),
+
+  withdraw: (vaultId: string, seed: string, amount: number) =>
+    request(`/vault/${vaultId}/withdraw`, {
+      method: "POST",
+      body: JSON.stringify({ seed, amount }),
+    }),
 };
 
 export const EXPLORER = (txHash: string) =>

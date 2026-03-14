@@ -31,6 +31,27 @@ const CREDENTIAL_META: Record<string, { color: string; description: string }> = 
   },
 };
 
+const LOAN_TIERS = {
+  emergency: {
+    label: "Emergency",
+    apr: "5% APR",
+    payments: "6 payments",
+    interval: "30-day intervals",
+    grace: "7-day grace",
+    description: "Fast access to funds. Available to all employees.",
+    requiresCreditworthy: false,
+  },
+  standard: {
+    label: "Standard",
+    apr: "3% APR",
+    payments: "12 payments",
+    interval: "30-day intervals",
+    grace: null,
+    description: "Lower rate for proven repayers.",
+    requiresCreditworthy: true,
+  },
+} as const;
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -75,6 +96,45 @@ function Spinner({ text }: { text: string }) {
   );
 }
 
+function StatCard({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  accent?: boolean;
+}) {
+  return (
+    <div className="border border-card-border bg-card-bg rounded-xl p-5 hover:border-accent/30 transition-colors group">
+      <div className="text-foreground/50 text-xs font-medium uppercase tracking-wide mb-2">{label}</div>
+      <div className={`text-2xl font-bold ${accent ? "text-accent" : "text-foreground"}`}>{value}</div>
+      <div className="text-foreground/30 text-xs mt-1">{sub}</div>
+    </div>
+  );
+}
+
+function RepaymentProgress({ principal, outstanding }: { principal: number; outstanding: number }) {
+  const repaid = Math.max(0, principal - outstanding);
+  const pct = principal > 0 ? Math.min(100, (repaid / principal) * 100) : 0;
+  return (
+    <div className="mt-3">
+      <div className="flex justify-between text-xs text-foreground/40 mb-1">
+        <span>{repaid.toFixed(2)} repaid</span>
+        <span>{outstanding.toFixed(2)} remaining</span>
+      </div>
+      <div className="h-1.5 bg-background rounded-full overflow-hidden">
+        <div
+          className="h-full bg-success rounded-full transition-all"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function EmployeeDashboard() {
   const [loading, setLoading] = useState("");
   const [error, setError] = useState("");
@@ -97,7 +157,9 @@ export default function EmployeeDashboard() {
 
   // Actions
   const [depositAmount, setDepositAmount] = useState("200");
+  const [withdrawAmount, setWithdrawAmount] = useState("");
   const [loanAmount, setLoanAmount] = useState("100");
+  const [loanTier, setLoanTier] = useState<"emergency" | "standard">("emergency");
   const [repayAmounts, setRepayAmounts] = useState<Record<string, string>>({});
   const [lastTxHash, setLastTxHash] = useState<string | null>(null);
   const [creditworthyCelebration, setCreditworthyCelebration] = useState(false);
@@ -229,6 +291,24 @@ export default function EmployeeDashboard() {
     }
   }
 
+  async function handleWithdraw() {
+    const amt = parseFloat(withdrawAmount);
+    if (!amt || amt <= 0) return;
+    setLoading(`Withdrawing ${amt} RLUSD from vault...`);
+    setError("");
+    setLastTxHash(null);
+    try {
+      const result = await api.withdraw(vaultId, employeeSeed, amt);
+      if (result.txHash) setLastTxHash(result.txHash);
+      await refresh();
+      setWithdrawAmount("");
+      setLoading("");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Withdrawal failed");
+      setLoading("");
+    }
+  }
+
   async function handleDrawLoan() {
     const amt = parseFloat(loanAmount);
     if (!amt || amt <= 0) return;
@@ -236,7 +316,7 @@ export default function EmployeeDashboard() {
     setError("");
     setLastTxHash(null);
     try {
-      const result = await api.drawLoan(vaultId, employeeAddress, employeeSeed, amt);
+      const result = await api.drawLoan(vaultId, employeeAddress, employeeSeed, amt, loanTier);
       if (result.txHash) setLastTxHash(result.txHash);
       setLoans((prev) => [...prev, result.loan]);
       await refresh();
@@ -274,6 +354,15 @@ export default function EmployeeDashboard() {
   }
 
   const activeLoanCount = loans.filter((l) => l.status === "active").length;
+  const hasCreditworthy = credentials.includes("creditworthy");
+  const hasEmployee = credentials.includes("employee");
+
+  const TX_TYPE_COLORS: Record<string, string> = {
+    deposit: "bg-success/20 text-success",
+    withdraw: "bg-accent/20 text-accent",
+    loan: "bg-blue-500/20 text-blue-400",
+    repay: "bg-purple-500/20 text-purple-400",
+  };
 
   return (
     <div>
@@ -369,29 +458,35 @@ export default function EmployeeDashboard() {
       {/* Dashboard */}
       {connected && (
         <div>
-          {/* Header */}
-          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-6">
+          {/* Header Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-5 border-b border-card-border">
+            {/* Left: identity */}
             <div>
-              <div className="flex items-center gap-2 mb-0.5">
+              <div className="flex items-center gap-2.5 mb-0.5">
                 <h1 className="text-2xl font-bold">{employeeName || "Employee"}</h1>
-                <span className="text-xs bg-success/20 text-success border border-success/30 rounded-full px-2 py-0.5">
+                <span className="text-xs bg-success/20 text-success border border-success/30 rounded-full px-2.5 py-0.5 font-medium">
                   Connected
                 </span>
               </div>
-              <div className="text-sm text-foreground/50">{companyName}</div>
-              <div className="flex items-center mt-1">
-                <span className="text-xs text-foreground/30 font-mono">
-                  {employeeAddress.slice(0, 8)}...{employeeAddress.slice(-6)}
+              <div className="text-sm text-foreground/40 mb-1.5">{companyName}</div>
+              <div className="flex items-center">
+                <span className="text-xs text-foreground/30 font-mono bg-card-bg border border-card-border rounded px-2 py-0.5">
+                  {employeeAddress.slice(0, 10)}...{employeeAddress.slice(-6)}
                 </span>
                 <CopyButton text={employeeAddress} />
               </div>
             </div>
-            <div className="flex gap-3 items-center">
+
+            {/* Right: actions */}
+            <div className="flex gap-3 items-center shrink-0">
               <button
                 onClick={refresh}
                 disabled={!!loading}
-                className="text-sm text-accent hover:text-accent-light transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 text-sm text-foreground/50 hover:text-foreground border border-card-border rounded-lg px-3 py-1.5 transition-colors disabled:opacity-40"
               >
+                <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0114.65-5.65M20 15a9 9 0 01-14.65 5.65" />
+                </svg>
                 Refresh
               </button>
               <button
@@ -404,70 +499,37 @@ export default function EmployeeDashboard() {
           </div>
 
           {/* Stats Bar */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <div className="border border-card-border bg-card-bg rounded-xl p-5">
-              <div className="text-foreground/50 text-sm mb-1">Your RLUSD</div>
-              <div className="text-xl font-semibold text-accent">{rlusdBalance.toFixed(2)}</div>
-              <div className="text-foreground/30 text-xs mt-1">RLUSD</div>
-            </div>
-            <div className="border border-card-border bg-card-bg rounded-xl p-5">
-              <div className="text-foreground/50 text-sm mb-1">Your XRP</div>
-              <div className="text-xl font-semibold">{xrpBalance.toFixed(2)}</div>
-              <div className="text-foreground/30 text-xs mt-1">for tx fees</div>
-            </div>
-            <div className="border border-card-border bg-card-bg rounded-xl p-5">
-              <div className="text-foreground/50 text-sm mb-1">Vault Pool</div>
-              <div className="text-xl font-semibold text-accent">{parseFloat(vaultBalance).toFixed(2)}</div>
-              <div className="text-foreground/30 text-xs mt-1">RLUSD</div>
-            </div>
-            <div className="border border-card-border bg-card-bg rounded-xl p-5">
-              <div className="text-foreground/50 text-sm mb-1">Your Shares</div>
-              <div className="text-xl font-semibold">{shares}</div>
-              <div className="text-foreground/30 text-xs mt-1">1 share = 1 RLUSD deposited</div>
-            </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+            <StatCard label="Your RLUSD" value={rlusdBalance.toFixed(2)} sub="wallet balance" accent />
+            <StatCard label="Your XRP" value={xrpBalance.toFixed(2)} sub="for tx fees" />
+            <StatCard label="Vault Pool" value={parseFloat(vaultBalance).toFixed(2)} sub="RLUSD pooled" accent />
+            <StatCard label="Your Shares" value={String(shares)} sub="1 share = 1 RLUSD deposited" />
           </div>
 
-          {/* Credentials */}
-          <div className="border border-card-border bg-card-bg rounded-xl p-4 mb-6">
-            <div className="text-foreground/50 text-sm mb-2">On-Chain Credentials</div>
-            <div className="flex gap-2 flex-wrap">
-              {credentials.length === 0 && (
-                <span className="text-foreground/40 text-sm">None yet</span>
-              )}
-              {credentials.map((c) => {
-                const meta = CREDENTIAL_META[c];
-                return (
-                  <span
-                    key={c}
-                    title={meta?.description}
-                    className={`text-sm px-3 py-1 rounded-full font-medium cursor-default ${meta?.color ?? "bg-card-border text-foreground/60"}`}
-                  >
-                    {c}
-                  </span>
-                );
-              })}
-            </div>
-            {credentials.length > 0 && (
-              <div className="mt-2 space-y-1">
-                {credentials.map((c) => {
-                  const meta = CREDENTIAL_META[c];
-                  return meta ? (
-                    <p key={c} className="text-xs text-foreground/30">
-                      <span className="text-foreground/50 font-medium">{c}:</span> {meta.description}
-                    </p>
-                  ) : null;
-                })}
-              </div>
+          {/* Credentials Strip */}
+          <div className="flex items-center gap-3 flex-wrap mb-6 px-1">
+            <span className="text-xs text-foreground/40 font-medium uppercase tracking-wide">On-chain credentials:</span>
+            {credentials.length === 0 && (
+              <span className="text-foreground/30 text-xs italic">No credentials yet</span>
             )}
+            {credentials.map((c) => {
+              const meta = CREDENTIAL_META[c];
+              return (
+                <span
+                  key={c}
+                  title={meta?.description}
+                  className={`text-xs px-3 py-1 rounded-full font-medium cursor-default ${meta?.color ?? "bg-card-border text-foreground/60"}`}
+                >
+                  {c}
+                </span>
+              );
+            })}
           </div>
 
           {/* Tab Bar */}
-          <div className="flex border-b border-card-border mb-6">
+          <div className="flex gap-1 mb-6 bg-card-bg border border-card-border rounded-xl p-1 w-fit">
             {(["savings", "loans", "history"] as const).map((tab) => {
-              const label =
-                tab === "loans" && activeLoanCount > 0
-                  ? `Loans (${activeLoanCount})`
-                  : tab.charAt(0).toUpperCase() + tab.slice(1);
+              const isActive = activeTab === tab;
               return (
                 <button
                   key={tab}
@@ -475,52 +537,73 @@ export default function EmployeeDashboard() {
                     setActiveTab(tab);
                     if (tab === "history" && ledger.length === 0) fetchLedger();
                   }}
-                  className={`px-5 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                    activeTab === tab
-                      ? "border-accent text-accent"
-                      : "border-transparent text-foreground/50 hover:text-foreground"
+                  className={`relative px-5 py-2 text-sm font-medium rounded-lg transition-all ${
+                    isActive
+                      ? "bg-accent text-black shadow-sm"
+                      : "text-foreground/50 hover:text-foreground"
                   }`}
                 >
-                  {label}
+                  {tab === "loans" ? "Loans" : tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  {tab === "loans" && activeLoanCount > 0 && (
+                    <span
+                      className={`ml-1.5 text-xs rounded-full px-1.5 py-0.5 font-semibold ${
+                        isActive ? "bg-black/20 text-black" : "bg-accent/20 text-accent"
+                      }`}
+                    >
+                      {activeLoanCount}
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
 
-          {/* Savings Tab */}
+          {/* ─── Savings Tab ─── */}
           {activeTab === "savings" && (
-            <div className="space-y-4">
+            <div className="space-y-5">
+              {/* Mini stats */}
               <div className="grid grid-cols-2 gap-4">
-                <div className="bg-card-bg border border-card-border rounded-lg p-4">
-                  <div className="text-foreground/50 text-xs mb-1">Your Shares</div>
-                  <div className="text-2xl font-semibold">{shares}</div>
+                <div className="bg-card-bg border border-card-border rounded-xl p-5">
+                  <div className="text-foreground/50 text-xs uppercase tracking-wide mb-2">Your Shares</div>
+                  <div className="text-3xl font-bold">{shares}</div>
                   <div className="text-foreground/30 text-xs mt-1">Each share = 1 RLUSD deposited</div>
                 </div>
-                <div className="bg-card-bg border border-card-border rounded-lg p-4">
-                  <div className="text-foreground/50 text-xs mb-1">Available to Deposit</div>
-                  <div className="text-2xl font-semibold text-accent">{rlusdBalance.toFixed(2)}</div>
+                <div className="bg-card-bg border border-card-border rounded-xl p-5">
+                  <div className="text-foreground/50 text-xs uppercase tracking-wide mb-2">Available to Deposit</div>
+                  <div className="text-3xl font-bold text-accent">{rlusdBalance.toFixed(2)}</div>
                   <div className="text-foreground/30 text-xs mt-1">RLUSD in your wallet</div>
                 </div>
               </div>
 
+              {/* Deposit card */}
               <div className="border border-card-border bg-card-bg rounded-xl p-6">
-                <h2 className="text-lg font-semibold mb-1">Deposit to Vault</h2>
-                <p className="text-foreground/40 text-xs mb-1">
-                  Pooled deposits back loans for other members. Earn vault shares proportional to your contribution.
+                <h2 className="text-base font-semibold mb-1">Deposit to Vault</h2>
+                <p className="text-foreground/40 text-xs mb-4">
+                  Pooled deposits back loans for other members. Earn vault shares proportional to your contribution. Takes ~5–10s on-chain.
                 </p>
-                <p className="text-foreground/30 text-xs mb-4">Takes ~5–10s on-chain.</p>
-                <div className="flex gap-3">
-                  <input
-                    type="number"
-                    value={depositAmount}
-                    onChange={(e) => setDepositAmount(e.target.value)}
-                    placeholder="Amount (RLUSD)"
-                    max={rlusdBalance}
-                    className="bg-background border border-card-border rounded-lg px-4 py-2 w-40 text-sm"
-                  />
+                <div className="flex gap-3 flex-wrap items-end">
+                  <div>
+                    <div className="text-xs text-foreground/40 mb-1.5">Amount (RLUSD)</div>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        value={depositAmount}
+                        onChange={(e) => setDepositAmount(e.target.value)}
+                        placeholder="0.00"
+                        max={rlusdBalance}
+                        className="bg-background border border-card-border rounded-lg px-4 py-2 w-36 text-sm focus:outline-none focus:border-accent transition-colors"
+                      />
+                      <button
+                        onClick={() => setDepositAmount(rlusdBalance.toFixed(2))}
+                        className="text-xs px-2.5 py-2 border border-card-border rounded-lg text-foreground/50 hover:text-accent hover:border-accent/40 transition-colors"
+                      >
+                        Max
+                      </button>
+                    </div>
+                  </div>
                   <button
                     onClick={handleDeposit}
-                    disabled={!!loading || parseFloat(depositAmount) > rlusdBalance}
+                    disabled={!!loading || parseFloat(depositAmount) > rlusdBalance || !depositAmount}
                     className="bg-accent hover:bg-accent-light text-black font-semibold px-6 py-2 rounded-lg transition-colors disabled:opacity-50"
                   >
                     Deposit
@@ -530,159 +613,240 @@ export default function EmployeeDashboard() {
                   <p className="text-danger text-xs mt-2">Insufficient RLUSD balance</p>
                 )}
               </div>
-            </div>
-          )}
 
-          {/* Loans Tab */}
-          {activeTab === "loans" && (
-            <div className="space-y-6">
-              {/* Active Loans */}
-              {loans.length === 0 && (
-                <p className="text-foreground/40 text-sm">No active loans. Use the form below to request one.</p>
-              )}
-              {loans.length > 0 && (
-                <div className="border border-card-border bg-card-bg rounded-xl p-6">
-                  <h2 className="text-lg font-semibold mb-4">Your Loans</h2>
-                  <div className="space-y-4">
-                    {loans.map((loan) => {
-                      const outstanding = loan.loanInfo?.PrincipalOutstanding ?? loan.remaining;
-                      const outstandingNum = parseFloat(outstanding);
-                      return (
-                        <div key={loan.id} className="bg-background/50 border border-card-border rounded-lg p-4">
-                          <div className="flex justify-between items-start mb-3">
-                            <div>
-                              <div className="text-sm">
-                                Principal: <span className="text-accent">{loan.principal} RLUSD</span>
-                              </div>
-                              <div className="text-sm mt-1">
-                                Outstanding:{" "}
-                                <span className={outstandingNum > 0 ? "text-danger" : "text-success"}>
-                                  {outstandingNum.toFixed(2)} RLUSD
-                                </span>
-                              </div>
-                              <div className="text-xs text-foreground/30 font-mono mt-1 break-all">
-                                ID: {loan.id.slice(0, 20)}...
-                              </div>
-                            </div>
-                            <span
-                              className={`text-xs px-2 py-0.5 rounded-full ${
-                                loan.status === "repaid"
-                                  ? "bg-success/20 text-success"
-                                  : loan.status === "defaulted"
-                                  ? "bg-danger/20 text-danger"
-                                  : "bg-accent/20 text-accent"
-                              }`}
-                            >
-                              {loan.status}
-                            </span>
-                          </div>
-
-                          {loan.status === "active" && outstandingNum > 0 && (
-                            <div className="flex gap-2 flex-wrap">
-                              <input
-                                type="number"
-                                value={repayAmounts[loan.id] || ""}
-                                onChange={(e) =>
-                                  setRepayAmounts((prev) => ({ ...prev, [loan.id]: e.target.value }))
-                                }
-                                placeholder={`Amount (max ${outstandingNum.toFixed(2)})`}
-                                className="bg-background border border-card-border rounded-lg px-3 py-1.5 w-48 text-sm"
-                              />
-                              <button
-                                onClick={() => handleRepay(loan.id, outstanding)}
-                                disabled={!!loading}
-                                className="bg-success hover:bg-success/80 text-black font-semibold px-5 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-50"
-                              >
-                                Repay
-                              </button>
-                              <button
-                                onClick={() => handlePayInFull(loan.id, outstanding)}
-                                disabled={!!loading}
-                                className="border border-success text-success hover:bg-success/10 font-semibold px-5 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-50"
-                              >
-                                Pay in Full
-                              </button>
-                            </div>
-                          )}
-
-                          {loan.status === "repaid" && (
-                            <div className="text-success text-sm mt-1">
-                              Fully repaid — &quot;creditworthy&quot; credential issued on-chain!
-                            </div>
-                          )}
-
-                          {loan.status === "defaulted" && (
-                            <div className="text-danger text-sm mt-1">
-                              This loan was defaulted by the employer.
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* Draw New Loan */}
-              <div className="border border-card-border bg-card-bg rounded-xl p-6">
-                <h2 className="text-lg font-semibold mb-3">Request Emergency Loan</h2>
-
-                {/* Loan Terms */}
-                <div className="bg-background/50 border border-card-border rounded-lg p-4 mb-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-                  <div>
-                    <div className="text-accent font-semibold text-sm">5% APR</div>
-                    <div className="text-foreground/40 text-xs">Annual rate</div>
-                  </div>
-                  <div>
-                    <div className="text-accent font-semibold text-sm">6 payments</div>
-                    <div className="text-foreground/40 text-xs">Monthly installments</div>
-                  </div>
-                  <div>
-                    <div className="text-accent font-semibold text-sm">30-day</div>
-                    <div className="text-foreground/40 text-xs">Payment intervals</div>
-                  </div>
-                  <div>
-                    <div className="text-accent font-semibold text-sm">7-day grace</div>
-                    <div className="text-foreground/40 text-xs">Before default risk</div>
-                  </div>
-                </div>
-
-                <p className="text-foreground/30 text-xs mb-4">
-                  3% early payoff rate if you pay in full before term. Requires the &quot;employee&quot; credential.
+              {/* Withdraw card */}
+              <div className={`border rounded-xl p-6 ${shares === 0 ? "border-card-border bg-card-bg/50 opacity-60" : "border-card-border bg-card-bg"}`}>
+                <h2 className="text-base font-semibold mb-1">Withdraw from Vault</h2>
+                <p className="text-foreground/40 text-xs mb-4">
+                  Withdraw your vested shares. Unvested employer match will be clawed back automatically.
                 </p>
-                <div className="flex gap-3">
-                  <input
-                    type="number"
-                    value={loanAmount}
-                    onChange={(e) => setLoanAmount(e.target.value)}
-                    placeholder="Amount (RLUSD)"
-                    className="bg-background border border-card-border rounded-lg px-4 py-2 w-40 text-sm"
-                  />
+                <div className="flex gap-3 flex-wrap items-end">
+                  <div>
+                    <div className="text-xs text-foreground/40 mb-1.5">Amount (RLUSD)</div>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        value={withdrawAmount}
+                        onChange={(e) => setWithdrawAmount(e.target.value)}
+                        placeholder="0.00"
+                        max={shares}
+                        disabled={shares === 0}
+                        className="bg-background border border-card-border rounded-lg px-4 py-2 w-36 text-sm focus:outline-none focus:border-accent transition-colors disabled:opacity-40"
+                      />
+                      <button
+                        onClick={() => setWithdrawAmount(String(shares))}
+                        disabled={shares === 0}
+                        className="text-xs px-2.5 py-2 border border-card-border rounded-lg text-foreground/50 hover:text-accent hover:border-accent/40 transition-colors disabled:opacity-40"
+                      >
+                        Max
+                      </button>
+                    </div>
+                  </div>
                   <button
-                    onClick={handleDrawLoan}
-                    disabled={!!loading || !credentials.includes("employee")}
-                    className="bg-accent hover:bg-accent-light text-black font-semibold px-6 py-2 rounded-lg transition-colors disabled:opacity-50"
+                    onClick={handleWithdraw}
+                    disabled={!!loading || shares === 0 || !withdrawAmount || parseFloat(withdrawAmount) <= 0}
+                    title={shares === 0 ? "You have no shares to withdraw" : undefined}
+                    className="bg-card-border hover:bg-foreground/10 text-foreground font-semibold px-6 py-2 rounded-lg transition-colors disabled:opacity-50"
                   >
-                    Draw Loan
+                    Withdraw
                   </button>
                 </div>
-                {!credentials.includes("employee") && (
-                  <p className="text-danger text-xs mt-2">Missing &quot;employee&quot; credential</p>
+                {shares === 0 && (
+                  <p className="text-foreground/30 text-xs mt-2">Deposit first to earn shares.</p>
                 )}
               </div>
             </div>
           )}
 
-          {/* History Tab */}
+          {/* ─── Loans Tab ─── */}
+          {activeTab === "loans" && (
+            <div className="space-y-6">
+              {/* Active Loans */}
+              {loans.length === 0 ? (
+                <div className="border border-dashed border-card-border rounded-xl p-8 text-center">
+                  <div className="text-foreground/30 text-sm">No loans yet. Use the form below to request one.</div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <h2 className="text-sm font-medium text-foreground/50 uppercase tracking-wide">Your Loans</h2>
+                  {loans.map((loan) => {
+                    const outstanding = loan.loanInfo?.PrincipalOutstanding ?? loan.remaining;
+                    const outstandingNum = parseFloat(outstanding);
+                    return (
+                      <div key={loan.id} className="border border-card-border bg-card-bg rounded-xl p-5">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <div className="text-sm font-medium">
+                              Principal:{" "}
+                              <span className="text-accent font-semibold">{loan.principal} RLUSD</span>
+                            </div>
+                            <div className="text-xs text-foreground/30 font-mono mt-1">
+                              {loan.id.slice(0, 20)}...
+                            </div>
+                          </div>
+                          <span
+                            className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                              loan.status === "repaid"
+                                ? "bg-success/20 text-success border border-success/30"
+                                : loan.status === "defaulted"
+                                ? "bg-danger/20 text-danger border border-danger/30"
+                                : "bg-accent/20 text-accent border border-accent/30"
+                            }`}
+                          >
+                            {loan.status}
+                          </span>
+                        </div>
+
+                        <RepaymentProgress principal={loan.principal} outstanding={outstandingNum} />
+
+                        <div className="mt-1 text-xs text-foreground/40">
+                          <span className={outstandingNum > 0 ? "text-danger" : "text-success"}>
+                            {outstandingNum.toFixed(2)} RLUSD
+                          </span>{" "}
+                          outstanding
+                        </div>
+
+                        {loan.status === "active" && outstandingNum > 0 && (
+                          <div className="flex gap-2 flex-wrap mt-4">
+                            <input
+                              type="number"
+                              value={repayAmounts[loan.id] || ""}
+                              onChange={(e) =>
+                                setRepayAmounts((prev) => ({ ...prev, [loan.id]: e.target.value }))
+                              }
+                              placeholder={`max ${outstandingNum.toFixed(2)}`}
+                              className="bg-background border border-card-border rounded-lg px-3 py-1.5 w-44 text-sm focus:outline-none focus:border-accent transition-colors"
+                            />
+                            <button
+                              onClick={() => handleRepay(loan.id, outstanding)}
+                              disabled={!!loading}
+                              className="bg-success hover:bg-success/80 text-black font-semibold px-5 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-50"
+                            >
+                              Repay
+                            </button>
+                            <button
+                              onClick={() => handlePayInFull(loan.id, outstanding)}
+                              disabled={!!loading}
+                              className="border border-success text-success hover:bg-success/10 font-semibold px-5 py-1.5 rounded-lg text-sm transition-colors disabled:opacity-50"
+                            >
+                              Pay in Full
+                            </button>
+                          </div>
+                        )}
+
+                        {loan.status === "repaid" && (
+                          <div className="text-success text-sm mt-3">
+                            Fully repaid — &quot;creditworthy&quot; credential issued on-chain!
+                          </div>
+                        )}
+
+                        {loan.status === "defaulted" && (
+                          <div className="text-danger text-sm mt-3">
+                            This loan was defaulted by the employer.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Loan Tier Selection */}
+              <div>
+                <h2 className="text-sm font-medium text-foreground/50 uppercase tracking-wide mb-3">Select Loan Tier</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {(["emergency", "standard"] as const).map((tier) => {
+                    const t = LOAN_TIERS[tier];
+                    const isSelected = loanTier === tier;
+                    const isLocked = t.requiresCreditworthy && !hasCreditworthy;
+                    return (
+                      <button
+                        key={tier}
+                        onClick={() => !isLocked && setLoanTier(tier)}
+                        disabled={isLocked}
+                        className={`text-left rounded-xl p-4 border-2 transition-all ${
+                          isSelected
+                            ? "border-accent bg-accent/5"
+                            : isLocked
+                            ? "border-card-border bg-card-bg/50 opacity-60 cursor-not-allowed"
+                            : "border-card-border bg-card-bg hover:border-accent/40"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-semibold text-sm">{t.label}</span>
+                          {isLocked ? (
+                            <span className="text-xs text-foreground/40 flex items-center gap-1">
+                              <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+                              </svg>
+                              Requires creditworthy
+                            </span>
+                          ) : isSelected ? (
+                            <span className="text-xs text-accent font-medium">Selected</span>
+                          ) : null}
+                        </div>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 mb-2">
+                          <span className={`text-sm font-bold ${isSelected ? "text-accent" : "text-foreground"}`}>{t.apr}</span>
+                          <span className="text-xs text-foreground/50">{t.payments}</span>
+                          <span className="text-xs text-foreground/50">{t.interval}</span>
+                          {t.grace && <span className="text-xs text-foreground/50">{t.grace} grace</span>}
+                        </div>
+                        <p className="text-xs text-foreground/40">{t.description}</p>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Draw Loan form */}
+              <div className="border border-card-border bg-card-bg rounded-xl p-6">
+                <h2 className="text-base font-semibold mb-1">Draw Loan</h2>
+                <p className="text-foreground/40 text-xs mb-1">
+                  Borrowing at <span className="text-foreground/70">{LOAN_TIERS[loanTier].apr}</span> · {LOAN_TIERS[loanTier].payments} · {LOAN_TIERS[loanTier].interval}
+                  {LOAN_TIERS[loanTier].grace ? ` · ${LOAN_TIERS[loanTier].grace} grace` : ""}
+                </p>
+                <p className="text-foreground/30 text-xs mb-4">
+                  Requires the &quot;employee&quot; credential. Takes ~5–10s on-chain.
+                </p>
+                <div className="flex gap-3 flex-wrap items-end">
+                  <div>
+                    <div className="text-xs text-foreground/40 mb-1.5">Amount (RLUSD)</div>
+                    <input
+                      type="number"
+                      value={loanAmount}
+                      onChange={(e) => setLoanAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="bg-background border border-card-border rounded-lg px-4 py-2 w-36 text-sm focus:outline-none focus:border-accent transition-colors"
+                    />
+                  </div>
+                  <button
+                    onClick={handleDrawLoan}
+                    disabled={!!loading || !hasEmployee}
+                    className="bg-accent hover:bg-accent-light text-black font-semibold px-6 py-2 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    Draw Loan
+                  </button>
+                </div>
+                {!hasEmployee && (
+                  <p className="text-danger text-xs mt-2">Missing &quot;employee&quot; credential — contact your employer to be added as a member.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ─── History Tab ─── */}
           {activeTab === "history" && (
             <div className="border border-card-border bg-card-bg rounded-xl p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">Transaction History</h2>
+              <div className="flex items-center justify-between mb-5">
+                <h2 className="text-base font-semibold">Transaction History</h2>
                 <button
                   onClick={fetchLedger}
                   disabled={ledgerLoading}
-                  className="text-sm text-accent hover:text-accent-light transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 text-sm text-accent hover:text-accent-light transition-colors disabled:opacity-50"
                 >
+                  <svg className={`h-3.5 w-3.5 ${ledgerLoading ? "animate-spin" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5M20 20v-5h-5M4 9a9 9 0 0114.65-5.65M20 15a9 9 0 01-14.65 5.65" />
+                  </svg>
                   {ledgerLoading ? "Loading..." : "Refresh"}
                 </button>
               </div>
@@ -690,30 +854,36 @@ export default function EmployeeDashboard() {
               {ledgerLoading && <Spinner text="Fetching vault ledger..." />}
 
               {!ledgerLoading && ledger.length === 0 && (
-                <p className="text-foreground/40 text-sm">No transactions found for this vault.</p>
+                <div className="text-center py-10 border border-dashed border-card-border rounded-xl">
+                  <p className="text-foreground/30 text-sm">No transactions found for this vault.</p>
+                </div>
               )}
 
               {ledger.length > 0 && (
                 <div className="space-y-2">
                   {ledger.map((entry, i) => {
                     const hash = entry.txHash ?? entry.hash ?? "";
+                    const typeKey = (entry.type ?? "").toLowerCase();
+                    const typeColor = TX_TYPE_COLORS[typeKey] ?? "bg-card-border text-foreground/50";
                     return (
                       <div
                         key={hash || i}
-                        className="bg-background/50 border border-card-border rounded-lg p-3 flex items-start justify-between gap-4"
+                        className="bg-background/50 border border-card-border rounded-lg p-3.5 flex items-center justify-between gap-4"
                       >
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium capitalize">
-                            {entry.type ?? "Transaction"}
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 capitalize ${typeColor}`}>
+                            {entry.type ?? "tx"}
+                          </span>
+                          <div className="min-w-0">
+                            {entry.amount && (
+                              <div className="text-sm font-medium">{entry.amount} RLUSD</div>
+                            )}
+                            {entry.timestamp && (
+                              <div className="text-xs text-foreground/30 mt-0.5">
+                                {new Date(entry.timestamp).toLocaleString()}
+                              </div>
+                            )}
                           </div>
-                          {entry.amount && (
-                            <div className="text-xs text-foreground/50 mt-0.5">{entry.amount} RLUSD</div>
-                          )}
-                          {entry.timestamp && (
-                            <div className="text-xs text-foreground/30 mt-0.5">
-                              {new Date(entry.timestamp).toLocaleString()}
-                            </div>
-                          )}
                         </div>
                         {hash && (
                           <div className="shrink-0">
