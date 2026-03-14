@@ -134,6 +134,7 @@ export default function EmployerDashboard() {
   const [xummPayloadId, setXummPayloadId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [manualSeed, setManualSeed] = useState("");
+  const [manualVaultId, setManualVaultId] = useState("");
   const [xummAddress, setXummAddress] = useState<string | null>(null); // address verified via XUMM, awaiting seed
 
   // Restore session from localStorage
@@ -216,16 +217,24 @@ export default function EmployerDashboard() {
     }
   }
 
-  // Connect with existing seed
+  // Sign back in with seed + vault ID
   async function handleSeedConnect() {
     if (!manualSeed) return;
-    setLoading("Connecting wallet...");
+    setLoading("Connecting...");
     setError("");
     try {
       await api.init();
-      // Derive address from seed by creating a balance check
-      // The backend walletFromSeed derives the address
       setEmployer({ address: "", seed: manualSeed });
+
+      // If vault ID provided, load it directly
+      if (manualVaultId) {
+        const vaultData = await api.getVault(manualVaultId);
+        setVault(vaultData);
+        try {
+          localStorage.setItem("hyve_employer_seed", manualSeed);
+          localStorage.setItem("hyve_employer_vault_id", manualVaultId);
+        } catch {}
+      }
       setLoading("");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Connection failed");
@@ -434,30 +443,47 @@ export default function EmployerDashboard() {
             </div>
           )}
 
-          {/* Manual seed input (collapsed) */}
+          {/* Sign back in */}
           {!qrUrl && (
-            <details className="mt-4">
-              <summary className="text-xs text-foreground/40 cursor-pointer hover:text-foreground/60 transition-colors">
-                Connect with existing wallet seed
-              </summary>
-              <div className="flex gap-3 mt-3">
-                <input
-                  type="password"
-                  value={manualSeed}
-                  onChange={(e) => setManualSeed(e.target.value)}
-                  placeholder="sEdXXX..."
-                  className="bg-background border border-card-border rounded-lg px-4 py-2 flex-1 text-sm font-mono focus:outline-none focus:border-accent transition-colors"
-                />
+            <div className="mt-6 border border-card-border bg-card-bg rounded-xl p-6">
+              <h3 className="text-base font-semibold mb-1">Already have a vault?</h3>
+              <p className="text-foreground/50 text-xs mb-4">Sign back in with your vault ID and wallet seed.</p>
+              <div className="space-y-3">
+                <div>
+                  <label className="flex items-center text-sm font-medium mb-1.5">
+                    Vault ID
+                    <InfoTip text="The 64-character hex ID shown when you created your vault. You can find it in the 'On-chain IDs' section of your dashboard." />
+                  </label>
+                  <input
+                    type="text"
+                    value={manualVaultId}
+                    onChange={(e) => setManualVaultId(e.target.value)}
+                    placeholder="64-character hex string"
+                    className="w-full bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-accent transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="flex items-center text-sm font-medium mb-1.5">
+                    Wallet Seed
+                    <InfoTip text="Your employer wallet seed (starts with 's'). This was shown when you first connected." />
+                  </label>
+                  <input
+                    type="password"
+                    value={manualSeed}
+                    onChange={(e) => setManualSeed(e.target.value)}
+                    placeholder="sEdXXX..."
+                    className="w-full bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-accent transition-colors"
+                  />
+                </div>
                 <button
                   onClick={handleSeedConnect}
-                  disabled={!!loading || !manualSeed}
-                  className="bg-card-border hover:bg-foreground/10 text-foreground font-semibold px-5 py-2 rounded-lg text-sm transition-colors disabled:opacity-50"
+                  disabled={!!loading || !manualSeed || !manualVaultId}
+                  className="w-full bg-card-border hover:bg-foreground/10 text-foreground font-semibold px-6 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50"
                 >
-                  Connect
+                  Sign In
                 </button>
               </div>
-              <p className="text-xs text-foreground/30 mt-1">Paste your XRPL seed to connect an existing wallet.</p>
-            </details>
+            </div>
           )}
         </div>
       )}
