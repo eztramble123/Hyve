@@ -17,6 +17,11 @@ export const metadata: Metadata = {
   title: "Hyve — On-Chain Credit Union",
   description:
     "XRPL-based employer-sponsored financial wellness platform for SMBs",
+  icons: {
+    icon: "/hyve_icon.svg",
+    shortcut: "/hyve_icon.svg",
+    apple: "/hyve_icon.svg",
+  },
 };
 
 export default function RootLayout({
@@ -33,6 +38,11 @@ export default function RootLayout({
           <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
             {/* Logo */}
             <a href="/" className="flex items-center gap-2 group">
+              <img
+                src="/hyve_icon.svg"
+                alt="Hyve"
+                className="w-6 h-6 group-hover:opacity-80 transition-opacity"
+              />
               <span
                 className="text-xl font-semibold tracking-widest text-accent group-hover:opacity-80 transition-opacity"
                 style={{ letterSpacing: "0.2em" }}
