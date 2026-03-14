@@ -939,13 +939,197 @@ app.get("/api/vault/:vaultId/ledger", async (req, res) => {
       limit: 50,
     });
 
-    res.json({
-      transactions: response.result.transactions,
+    // Enrich transactions with human-readable descriptions
+    const enriched = (response.result.transactions || []).map((entry) => {
+      const tx = entry.tx_json || entry.tx || entry;
+      const meta = entry.meta || {};
+      const txType = tx.TransactionType || "Unknown";
+      const hash = entry.hash || tx.hash || "";
+      const date = tx.date ? new Date((tx.date + 946684800) * 1000).toISOString() : null;
+      const success = meta.TransactionResult === "tesSUCCESS";
+
+      const info = parseTxType(txType, tx, vault);
+      return {
+        hash,
+        type: info.type,
+        label: info.label,
+        description: info.description,
+        primitive: info.primitive,
+        amount: info.amount,
+        counterparty: info.counterparty,
+        date,
+        success,
+        txType,
+      };
     });
+
+    res.json({ transactions: enriched });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
+function parseTxType(txType, tx, vault) {
+  const employerAddr = vault.employerAddress;
+  const empName = (addr) => {
+    const emp = vault.employees?.find((e) => e.address === addr);
+    return emp?.name || addr?.slice(0, 8) + "...";
+  };
+
+  switch (txType) {
+    case "VaultCreate":
+      return {
+        type: "vault",
+        label: "Vault Created",
+        description: "Created an on-chain savings pool (Single Asset Vault) for employee deposits and lending.",
+        primitive: "XLS-65 Single Asset Vault",
+        amount: null,
+        counterparty: null,
+      };
+    case "VaultDeposit": {
+      const depositor = tx.Account;
+      const amount = typeof tx.Amount === "object" ? tx.Amount.value : tx.Amount;
+      const isEmployer = depositor === employerAddr;
+      return {
+        type: "deposit",
+        label: isEmployer ? "Employer Match Deposit" : "Employee Deposit",
+        description: isEmployer
+          ? `Employer matched an employee deposit with ${amount} RLUSD into the vault pool.`
+          : `${empName(depositor)} deposited ${amount} RLUSD into the vault. Vault shares issued in return.`,
+        primitive: "XLS-65 VaultDeposit",
+        amount,
+        counterparty: isEmployer ? null : empName(depositor),
+      };
+    }
+    case "VaultWithdraw": {
+      const amount = typeof tx.Amount === "object" ? tx.Amount.value : tx.Amount;
+      return {
+        type: "withdraw",
+        label: "Vault Withdrawal",
+        description: `Withdrew ${amount} RLUSD from the vault. Shares burned and RLUSD returned to wallet.`,
+        primitive: "XLS-65 VaultWithdraw",
+        amount,
+        counterparty: empName(tx.Account),
+      };
+    }
+    case "VaultClawback":
+      return {
+        type: "clawback",
+        label: "Vault Clawback",
+        description: "Reclaimed unvested employer match shares from an employee (vesting enforcement).",
+        primitive: "XLS-65 VaultClawback",
+        amount: null,
+        counterparty: tx.Holder ? empName(tx.Holder) : null,
+      };
+    case "LoanBrokerSet":
+      return {
+        type: "setup",
+        label: "Loan Broker Created",
+        description: "Set up the lending broker — enables the vault to issue loans to credentialed employees.",
+        primitive: "XLS-66 LoanBrokerSet",
+        amount: null,
+        counterparty: null,
+      };
+    case "LoanBrokerCoverDeposit": {
+      const amount = typeof tx.Amount === "object" ? tx.Amount.value : tx.Amount;
+      return {
+        type: "setup",
+        label: "Cover Capital Deposited",
+        description: `Deposited ${amount} RLUSD as first-loss cover — protects depositors if a borrower defaults.`,
+        primitive: "XLS-66 LoanBrokerCoverDeposit",
+        amount,
+        counterparty: null,
+      };
+    }
+    case "LoanSet": {
+      const principal = tx.PrincipalRequested || "?";
+      return {
+        type: "loan",
+        label: "Loan Issued",
+        description: `Issued a ${principal} RLUSD loan from the vault pool. Co-signed by employer broker and borrower.`,
+        primitive: "XLS-66 LoanSet",
+        amount: principal,
+        counterparty: tx.Counterparty ? empName(tx.Counterparty) : null,
+      };
+    }
+    case "LoanPay": {
+      const amount = typeof tx.Amount === "object" ? tx.Amount.value : tx.Amount;
+      return {
+        type: "repay",
+        label: "Loan Repayment",
+        description: `${empName(tx.Account)} repaid ${amount} RLUSD. Funds returned to the vault pool.`,
+        primitive: "XLS-66 LoanPay",
+        amount,
+        counterparty: empName(tx.Account),
+      };
+    }
+    case "LoanManage":
+      return {
+        type: "default",
+        label: "Loan Defaulted",
+        description: "Employer marked a loan as defaulted. Cover capital absorbs the loss to protect other depositors.",
+        primitive: "XLS-66 LoanManage",
+        amount: null,
+        counterparty: null,
+      };
+    case "CredentialCreate":
+      return {
+        type: "credential",
+        label: "Credential Issued",
+        description: `Issued an on-chain credential to ${empName(tx.Subject)}. Credentials gate access to vault features.`,
+        primitive: "XLS-70 CredentialCreate",
+        amount: null,
+        counterparty: empName(tx.Subject),
+      };
+    case "CredentialAccept":
+      return {
+        type: "credential",
+        label: "Credential Accepted",
+        description: `${empName(tx.Account)} accepted their on-chain credential — they can now deposit and borrow.`,
+        primitive: "XLS-70 CredentialAccept",
+        amount: null,
+        counterparty: empName(tx.Account),
+      };
+    case "TrustSet":
+      return {
+        type: "setup",
+        label: "Trust Line Set",
+        description: "Established RLUSD trust line — required before the wallet can hold or transact in RLUSD.",
+        primitive: "RLUSD TrustSet",
+        amount: null,
+        counterparty: null,
+      };
+    case "AccountSet":
+      return {
+        type: "setup",
+        label: "Account Configured",
+        description: "Configured account settings (e.g. DefaultRipple, clawback permissions) for RLUSD issuance.",
+        primitive: "AccountSet",
+        amount: null,
+        counterparty: null,
+      };
+    case "Payment": {
+      const amount = typeof tx.DeliverMax === "object" ? tx.DeliverMax.value : (typeof tx.Amount === "object" ? tx.Amount.value : tx.Amount);
+      return {
+        type: "payment",
+        label: "RLUSD Transfer",
+        description: `Transferred ${amount} RLUSD to ${empName(tx.Destination)}.`,
+        primitive: "Payment",
+        amount,
+        counterparty: empName(tx.Destination),
+      };
+    }
+    default:
+      return {
+        type: "other",
+        label: txType,
+        description: `${txType} transaction on XRPL.`,
+        primitive: txType,
+        amount: null,
+        counterparty: null,
+      };
+  }
+}
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, async () => {

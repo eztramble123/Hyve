@@ -17,8 +17,14 @@ interface LedgerEntry {
   txHash?: string;
   hash?: string;
   type?: string;
+  label?: string;
+  description?: string;
+  primitive?: string;
   amount?: string;
+  counterparty?: string;
+  date?: string;
   timestamp?: string;
+  success?: boolean;
 }
 
 interface YieldData {
@@ -570,8 +576,17 @@ export default function EmployeeDashboard() {
   function formatDays(seconds: number) { return `${Math.round(seconds / 86400)}d`; }
 
   const TX_TYPE_COLORS: Record<string, string> = {
-    deposit: "bg-success/20 text-success", withdraw: "bg-accent/20 text-accent",
-    loan: "bg-blue-500/20 text-blue-400", repay: "bg-purple-500/20 text-purple-400",
+    deposit: "bg-success/20 text-success",
+    withdraw: "bg-accent/20 text-accent",
+    loan: "bg-blue-500/20 text-blue-400",
+    repay: "bg-purple-500/20 text-purple-400",
+    vault: "bg-accent/20 text-accent",
+    setup: "bg-foreground/10 text-foreground/60",
+    credential: "bg-purple-500/20 text-purple-400",
+    clawback: "bg-danger/20 text-danger",
+    default: "bg-danger/20 text-danger",
+    payment: "bg-blue-500/20 text-blue-400",
+    other: "bg-card-border text-foreground/50",
   };
 
   return (
@@ -1273,20 +1288,37 @@ export default function EmployeeDashboard() {
               )}
               {ledger.length > 0 && (
                 <div className="space-y-2">
-                  {ledger.map((entry, i) => {
-                    const hash = entry.txHash ?? entry.hash ?? "";
-                    const typeKey = (entry.type ?? "").toLowerCase();
+                  {ledger.map((entry: LedgerEntry, i: number) => {
+                    const hash = entry.hash ?? entry.txHash ?? "";
+                    const typeKey = entry.type ?? "other";
                     const typeColor = TX_TYPE_COLORS[typeKey] ?? "bg-card-border text-foreground/50";
+                    const label = entry.label ?? typeKey;
+                    const description = entry.description;
+                    const primitive = entry.primitive;
+                    const amount = entry.amount;
+                    const date = entry.date ?? entry.timestamp;
+                    const success = entry.success !== false;
                     return (
-                      <div key={hash || i} className="bg-background/50 border border-card-border rounded-lg p-3.5 flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3 min-w-0">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 capitalize ${typeColor}`}>{entry.type ?? "tx"}</span>
-                          <div className="min-w-0">
-                            {entry.amount && <div className="text-sm font-medium">{entry.amount} RLUSD</div>}
-                            {entry.timestamp && <div className="text-xs text-foreground/30 mt-0.5">{new Date(entry.timestamp).toLocaleString()}</div>}
+                      <div key={hash || i} className={`bg-background/50 border rounded-lg p-4 ${success ? "border-card-border" : "border-danger/30"}`}>
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`text-xs px-2 py-0.5 rounded-full font-medium shrink-0 ${typeColor}`}>{label}</span>
+                              {amount && <span className="text-sm font-semibold text-accent">{parseFloat(amount).toFixed(2)} RLUSD</span>}
+                              {!success && <span className="text-xs text-danger">Failed</span>}
+                            </div>
+                            {description && <p className="text-xs text-foreground/50 leading-relaxed">{description}</p>}
+                            <div className="flex items-center gap-3 mt-1.5">
+                              {primitive && (
+                                <span className="text-xs text-foreground/30 bg-card-border/50 rounded px-1.5 py-0.5 font-mono">
+                                  {primitive}
+                                </span>
+                              )}
+                              {date && <span className="text-xs text-foreground/30">{new Date(date).toLocaleString()}</span>}
+                            </div>
                           </div>
+                          {hash && <div className="shrink-0 pt-0.5"><TxLink hash={hash} /></div>}
                         </div>
-                        {hash && <div className="shrink-0"><TxLink hash={hash} /></div>}
                       </div>
                     );
                   })}
