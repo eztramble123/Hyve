@@ -134,6 +134,7 @@ export default function EmployerDashboard() {
   const [xummPayloadId, setXummPayloadId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [manualSeed, setManualSeed] = useState("");
+  const [xummAddress, setXummAddress] = useState<string | null>(null); // address verified via XUMM, awaiting seed
 
   useEffect(() => {
     api.xummEnabled().then(setXummAvailable);
@@ -159,9 +160,12 @@ export default function EmployerDashboard() {
             if (pollRef.current) clearInterval(pollRef.current);
             setQrUrl(null);
             setXummPayloadId(null);
-            // XUMM gives us address but not seed — employer needs seed for tx signing
-            // We still need their seed for demo, or use XUMM payload signing for each tx
-            setEmployer({ address: status.address, seed: "" });
+            // XUMM verified identity — now create a Devnet wallet linked to this user
+            // On mainnet, transactions would be signed via XUMM payloads instead
+            setLoading("Wallet verified! Setting up your Devnet vault wallet...");
+            const wallet = await api.createWallet();
+            setEmployer({ address: wallet.address, seed: wallet.seed });
+            setXummAddress(status.address);
             setLoading("");
           } else if (status.status === "cancelled" || status.status === "expired") {
             if (pollRef.current) clearInterval(pollRef.current);
