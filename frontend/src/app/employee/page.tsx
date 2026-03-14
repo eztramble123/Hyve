@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api, EXPLORER } from "@/lib/api";
 
 interface Loan {
@@ -177,6 +177,16 @@ export default function EmployeeDashboard() {
   const [employeeName, setEmployeeName] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [connected, setConnected] = useState(false);
+
+  // XUMM
+  const [xummAvailable, setXummAvailable] = useState(false);
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    api.xummEnabled().then(setXummAvailable);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
 
   const [rlusdBalance, setRlusdBalance] = useState(0);
   const [xrpBalance, setXrpBalance] = useState(0);
@@ -393,44 +403,116 @@ export default function EmployeeDashboard() {
             Deposit savings, earn vault shares, and access emergency loans — all powered by XRPL and RLUSD.
           </p>
 
-          <div className="w-full max-w-md border border-card-border bg-card-bg rounded-xl p-8 text-left space-y-5">
-            <div>
-              <label className="flex items-center text-sm font-medium mb-1.5">
-                Vault ID
-                <InfoTip text="A 64-character hex string that identifies your company's savings pool on the XRPL ledger. Your employer gives you this when they add you to the vault." />
-              </label>
-              <input
-                type="text"
-                value={vaultId}
-                onChange={(e) => setVaultId(e.target.value)}
-                placeholder="64-character hex string"
-                className="w-full bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-accent transition-colors"
-              />
+          {/* XUMM QR display */}
+          {qrUrl && (
+            <div className="w-full max-w-md flex flex-col items-center mb-6 p-6 bg-card-bg border border-accent/30 rounded-xl">
+              <p className="text-sm text-foreground/70 mb-3">Scan with your Xaman (XUMM) wallet app:</p>
+              <img src={qrUrl} alt="XUMM QR Code" className="w-48 h-48 rounded-lg" />
+              <p className="text-xs text-foreground/40 mt-3">Waiting for you to scan and approve...</p>
+              <button
+                onClick={() => {
+                  if (pollRef.current) clearInterval(pollRef.current);
+                  setQrUrl(null); setLoading("");
+                }}
+                className="text-xs text-foreground/40 hover:text-foreground/60 mt-2"
+              >
+                Cancel
+              </button>
             </div>
-            <div>
-              <label className="flex items-center text-sm font-medium mb-1.5">
-                Wallet Seed
-                <InfoTip text="Your private XRPL key (starts with 's'). This signs your transactions — never share it publicly. Your employer provides it when onboarding you." />
-              </label>
-              <input
-                type="password"
-                value={employeeSeed}
-                onChange={(e) => setEmployeeSeed(e.target.value)}
-                placeholder="sXXX..."
-                className="w-full bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-accent transition-colors"
-              />
+          )}
+
+          {!qrUrl && (
+            <div className="w-full max-w-md space-y-4">
+              {/* XUMM connect button */}
+              {xummAvailable && (
+                <button
+                  onClick={async () => {
+                    if (!vaultId) { setError("Enter your Vault ID first"); return; }
+                    setLoading("Generating QR code...");
+                    setError("");
+                    try {
+                      const payload = await api.xummSignIn();
+                      setQrUrl(payload.qrUrl);
+                      setLoading("Scan the QR code with Xaman...");
+                      pollRef.current = setInterval(async () => {
+                        try {
+                          const status = await api.xummStatus(payload.payloadId);
+                          if (status.status === "signed") {
+                            if (pollRef.current) clearInterval(pollRef.current);
+                            setQrUrl(null);
+                            setEmployeeAddress(status.address);
+                            // Try auth via on-chain credential
+                            try {
+                              const auth = await api.authEmployee(status.address, vaultId);
+                              setEmployeeName(auth.name || "");
+                              setCompanyName("");
+                              setRlusdBalance(auth.rlusdBalance || 0);
+                              setXrpBalance(auth.xrpBalance || 0);
+                              setCredentials(auth.credentials || []);
+                              setConnected(true);
+                              // Still need seed for signing — prompt user
+                            } catch {
+                              setError("Wallet connected but no employee credential found for this vault. Ask your employer to add you.");
+                            }
+                            setLoading("");
+                          } else if (status.status === "cancelled" || status.status === "expired") {
+                            if (pollRef.current) clearInterval(pollRef.current);
+                            setQrUrl(null); setLoading("");
+                            if (status.status === "expired") setError("QR code expired — try again");
+                          }
+                        } catch {}
+                      }, 2000);
+                    } catch (e: unknown) { setError(e instanceof Error ? e.message : "XUMM failed"); setLoading(""); }
+                  }}
+                  disabled={!!loading}
+                  className="w-full border-2 border-card-border bg-card-bg hover:border-accent/40 rounded-xl p-5 text-left transition-all"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <svg className="h-5 w-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                    <span className="font-semibold">Connect with Xaman</span>
+                  </div>
+                  <p className="text-xs text-foreground/50">Scan QR with the Xaman wallet app to prove your identity.</p>
+                </button>
+              )}
+
+              {/* Seed-based sign in */}
+              <div className="border border-card-border bg-card-bg rounded-xl p-6 text-left space-y-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <svg className="h-5 w-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                  </svg>
+                  <span className="font-semibold text-sm">Sign in with Seed</span>
+                </div>
+                <div>
+                  <label className="flex items-center text-sm font-medium mb-1.5">
+                    Vault ID
+                    <InfoTip text="A 64-character hex string that identifies your company's savings pool on the XRPL ledger. Your employer gives you this." />
+                  </label>
+                  <input type="text" value={vaultId} onChange={(e) => setVaultId(e.target.value)}
+                    placeholder="64-character hex string"
+                    className="w-full bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-accent transition-colors" />
+                </div>
+                <div>
+                  <label className="flex items-center text-sm font-medium mb-1.5">
+                    Wallet Seed
+                    <InfoTip text="Your private XRPL key (starts with 's'). Signs your transactions — never share it publicly." />
+                  </label>
+                  <input type="password" value={employeeSeed} onChange={(e) => setEmployeeSeed(e.target.value)}
+                    placeholder="sXXX..."
+                    className="w-full bg-background border border-card-border rounded-lg px-4 py-2.5 text-sm font-mono focus:outline-none focus:border-accent transition-colors" />
+                </div>
+                <button onClick={handleConnect} disabled={!!loading || !vaultId || !employeeSeed}
+                  className="w-full bg-accent hover:bg-accent-light text-black font-semibold px-6 py-3 rounded-lg transition-colors disabled:opacity-50 text-base">
+                  Sign In
+                </button>
+                <button onClick={clearSavedCredentials} className="block text-xs text-foreground/30 hover:text-foreground/60 transition-colors mx-auto w-full text-center">
+                  Clear saved credentials
+                </button>
+              </div>
             </div>
-            <button
-              onClick={handleConnect}
-              disabled={!!loading || !vaultId || !employeeSeed}
-              className="w-full bg-accent hover:bg-accent-light text-black font-semibold px-6 py-3 rounded-lg transition-colors disabled:opacity-50 text-base"
-            >
-              Sign In
-            </button>
-            <button onClick={clearSavedCredentials} className="block text-xs text-foreground/30 hover:text-foreground/60 transition-colors mx-auto w-full text-center">
-              Clear saved credentials
-            </button>
-          </div>
+          )}
 
           <div className="mt-12 flex gap-3 text-xs text-foreground/40">
             <span className="bg-card-bg border border-card-border rounded-full px-3 py-1">XRPL Devnet</span>

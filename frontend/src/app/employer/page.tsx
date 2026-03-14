@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { api, EXPLORER } from "@/lib/api";
 
 interface Employee {
@@ -122,12 +122,65 @@ export default function EmployerDashboard() {
   const [matchRate, setMatchRate] = useState("0.5");
   const [matchCap, setMatchCap] = useState("500");
   const [employeeName, setEmployeeName] = useState("");
+  const [employeeAddress, setEmployeeAddress] = useState("");
+  const [onboardMode, setOnboardMode] = useState<"demo" | "address">("demo");
   const [lastOnboardTx, setLastOnboardTx] = useState<TxHashes | null>(null);
   const [clawbackTarget, setClawbackTarget] = useState<string>("");
   const [clawbackAmount, setClawbackAmount] = useState("");
 
-  async function handleInit() {
-    setLoading("Initializing RLUSD issuer on XRPL Devnet...");
+  // XUMM state
+  const [xummAvailable, setXummAvailable] = useState(false);
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [xummPayloadId, setXummPayloadId] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [manualSeed, setManualSeed] = useState("");
+
+  useEffect(() => {
+    api.xummEnabled().then(setXummAvailable);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  // XUMM QR sign-in flow
+  async function handleXummConnect() {
+    setLoading("Generating QR code...");
+    setError("");
+    try {
+      await api.init();
+      const payload = await api.xummSignIn();
+      setQrUrl(payload.qrUrl);
+      setXummPayloadId(payload.payloadId);
+      setLoading("Scan the QR code with your Xaman wallet app...");
+
+      // Poll for sign result
+      pollRef.current = setInterval(async () => {
+        try {
+          const status = await api.xummStatus(payload.payloadId);
+          if (status.status === "signed") {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setQrUrl(null);
+            setXummPayloadId(null);
+            // XUMM gives us address but not seed — employer needs seed for tx signing
+            // We still need their seed for demo, or use XUMM payload signing for each tx
+            setEmployer({ address: status.address, seed: "" });
+            setLoading("");
+          } else if (status.status === "cancelled" || status.status === "expired") {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setQrUrl(null);
+            setXummPayloadId(null);
+            setLoading("");
+            if (status.status === "expired") setError("QR code expired — try again");
+          }
+        } catch {}
+      }, 2000);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "XUMM connect failed");
+      setLoading("");
+    }
+  }
+
+  // Demo wallet flow (auto-creates funded wallet)
+  async function handleDemoInit() {
+    setLoading("Creating demo wallet on XRPL Devnet...");
     setError("");
     try {
       await api.init();
@@ -136,6 +189,23 @@ export default function EmployerDashboard() {
       setLoading("");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Init failed");
+      setLoading("");
+    }
+  }
+
+  // Connect with existing seed
+  async function handleSeedConnect() {
+    if (!manualSeed) return;
+    setLoading("Connecting wallet...");
+    setError("");
+    try {
+      await api.init();
+      // Derive address from seed by creating a balance check
+      // The backend walletFromSeed derives the address
+      setEmployer({ address: "", seed: manualSeed });
+      setLoading("");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Connection failed");
       setLoading("");
     }
   }
@@ -160,19 +230,38 @@ export default function EmployerDashboard() {
   }
 
   async function handleOnboard() {
-    if (!vault || !employeeName) return;
-    setLoading(`Onboarding ${employeeName} (wallet + trust line + credential txs)...`);
-    setError("");
-    try {
-      const result = await api.onboardEmployee(vault.id, employeeName);
-      setLastOnboardTx(result.txHashes);
-      const updated = await api.getVault(vault.id);
-      setVault(updated);
-      setEmployeeName("");
-      setLoading("");
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Onboarding failed");
-      setLoading("");
+    if (!vault) return;
+    if (onboardMode === "demo") {
+      if (!employeeName) return;
+      setLoading(`Onboarding ${employeeName} (wallet + trust line + credential txs)...`);
+      setError("");
+      try {
+        const result = await api.onboardEmployee(vault.id, employeeName);
+        setLastOnboardTx(result.txHashes);
+        const updated = await api.getVault(vault.id);
+        setVault(updated);
+        setEmployeeName("");
+        setLoading("");
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Onboarding failed");
+        setLoading("");
+      }
+    } else {
+      if (!employeeAddress) return;
+      setLoading(`Adding ${employeeName || employeeAddress.slice(0, 8)} by wallet address...`);
+      setError("");
+      try {
+        const result = await api.addMember(vault.id, employeeAddress, employeeName || undefined);
+        setLastOnboardTx({ credentialCreate: result.txHash });
+        const updated = await api.getVault(vault.id);
+        setVault(updated);
+        setEmployeeName("");
+        setEmployeeAddress("");
+        setLoading("");
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Add member failed");
+        setLoading("");
+      }
     }
   }
 
@@ -228,20 +317,102 @@ export default function EmployerDashboard() {
         </div>
       )}
 
-      {/* Step 1: Initialize */}
+      {/* Step 1: Connect Wallet */}
       {!employer && (
         <div className="border border-card-border bg-card-bg rounded-xl p-6">
-          <h2 className="text-xl font-semibold mb-2">Step 1: Connect to XRPL Devnet</h2>
-          <p className="text-foreground/60 mb-4 text-sm">
-            This creates a test stablecoin (RLUSD) issuer and your employer wallet on the XRPL test network. Everything here uses test tokens — no real money.
+          <h2 className="text-xl font-semibold mb-2">Step 1: Connect Your Wallet</h2>
+          <p className="text-foreground/60 mb-5 text-sm">
+            Connect your XRPL wallet to create and manage a vault. Choose how you want to connect:
           </p>
-          <button
-            onClick={handleInit}
-            disabled={!!loading}
-            className="bg-accent hover:bg-accent-light text-black font-semibold px-6 py-2.5 rounded-lg transition-colors disabled:opacity-50"
-          >
-            Initialize
-          </button>
+
+          {/* QR code display */}
+          {qrUrl && (
+            <div className="flex flex-col items-center mb-6 p-6 bg-background/50 border border-accent/30 rounded-xl">
+              <p className="text-sm text-foreground/70 mb-3">Scan with your Xaman (XUMM) wallet app:</p>
+              <img src={qrUrl} alt="XUMM QR Code" className="w-48 h-48 rounded-lg" />
+              <p className="text-xs text-foreground/40 mt-3">Waiting for you to scan and approve...</p>
+              <button
+                onClick={() => {
+                  if (pollRef.current) clearInterval(pollRef.current);
+                  setQrUrl(null); setXummPayloadId(null); setLoading("");
+                }}
+                className="text-xs text-foreground/40 hover:text-foreground/60 mt-2"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {!qrUrl && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Option 1: XUMM QR */}
+              <button
+                onClick={handleXummConnect}
+                disabled={!!loading || !xummAvailable}
+                className={`text-left border-2 rounded-xl p-5 transition-all ${
+                  xummAvailable
+                    ? "border-card-border bg-card-bg hover:border-accent/40"
+                    : "border-card-border bg-card-bg/50 opacity-50 cursor-not-allowed"
+                }`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <svg className="h-5 w-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                  <span className="font-semibold">Scan with Xaman</span>
+                </div>
+                <p className="text-xs text-foreground/50">
+                  {xummAvailable
+                    ? "Scan a QR code with the Xaman (XUMM) wallet app to connect your existing XRPL wallet."
+                    : "XUMM not configured on server. Set XUMM_API_KEY to enable."}
+                </p>
+              </button>
+
+              {/* Option 2: Demo wallet */}
+              <button
+                onClick={handleDemoInit}
+                disabled={!!loading}
+                className="text-left border-2 border-accent bg-accent/5 rounded-xl p-5 hover:bg-accent/10 transition-all"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <svg className="h-5 w-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  <span className="font-semibold">Demo Mode</span>
+                  <span className="text-xs bg-accent/20 text-accent rounded-full px-2 py-0.5">Recommended</span>
+                </div>
+                <p className="text-xs text-foreground/50">
+                  Auto-creates a funded test wallet on XRPL Devnet. No real money — perfect for trying the full flow.
+                </p>
+              </button>
+            </div>
+          )}
+
+          {/* Manual seed input (collapsed) */}
+          {!qrUrl && (
+            <details className="mt-4">
+              <summary className="text-xs text-foreground/40 cursor-pointer hover:text-foreground/60 transition-colors">
+                Connect with existing wallet seed
+              </summary>
+              <div className="flex gap-3 mt-3">
+                <input
+                  type="password"
+                  value={manualSeed}
+                  onChange={(e) => setManualSeed(e.target.value)}
+                  placeholder="sEdXXX..."
+                  className="bg-background border border-card-border rounded-lg px-4 py-2 flex-1 text-sm font-mono focus:outline-none focus:border-accent transition-colors"
+                />
+                <button
+                  onClick={handleSeedConnect}
+                  disabled={!!loading || !manualSeed}
+                  className="bg-card-border hover:bg-foreground/10 text-foreground font-semibold px-5 py-2 rounded-lg text-sm transition-colors disabled:opacity-50"
+                >
+                  Connect
+                </button>
+              </div>
+              <p className="text-xs text-foreground/30 mt-1">Paste your XRPL seed to connect an existing wallet.</p>
+            </details>
+          )}
         </div>
       )}
 
@@ -410,26 +581,61 @@ export default function EmployerDashboard() {
 
           {/* Onboard Employee */}
           <div className="border border-card-border bg-card-bg rounded-xl p-6">
-            <h2 className="text-lg font-semibold mb-1">Onboard Employee</h2>
-            <p className="text-foreground/50 text-sm mb-4">
-              Add a team member to your vault. This creates their wallet, gives them test RLUSD, and issues an on-chain &quot;employee&quot; credential so they can deposit and borrow.
-            </p>
-            <div className="flex gap-3">
-              <input
-                type="text"
-                value={employeeName}
-                onChange={(e) => setEmployeeName(e.target.value)}
-                placeholder="Employee Name"
-                className="bg-background border border-card-border rounded-lg px-4 py-2.5 flex-1 text-sm focus:outline-none focus:border-accent transition-colors"
-              />
-              <button
-                onClick={handleOnboard}
-                disabled={!!loading || !employeeName}
-                className="bg-accent hover:bg-accent-light text-black font-semibold px-6 py-2.5 rounded-lg transition-colors disabled:opacity-50"
-              >
-                Onboard
-              </button>
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-lg font-semibold">Add Employee</h2>
+              <div className="flex gap-1 bg-background rounded-lg p-0.5">
+                <button
+                  onClick={() => setOnboardMode("demo")}
+                  className={`text-xs px-3 py-1 rounded-md transition-all ${onboardMode === "demo" ? "bg-accent text-black font-medium" : "text-foreground/50 hover:text-foreground"}`}
+                >
+                  Demo
+                </button>
+                <button
+                  onClick={() => setOnboardMode("address")}
+                  className={`text-xs px-3 py-1 rounded-md transition-all ${onboardMode === "address" ? "bg-accent text-black font-medium" : "text-foreground/50 hover:text-foreground"}`}
+                >
+                  By Address
+                </button>
+              </div>
             </div>
+
+            {onboardMode === "demo" ? (
+              <>
+                <p className="text-foreground/50 text-sm mb-4">
+                  Creates a test wallet, funds it with RLUSD, and issues an on-chain &quot;employee&quot; credential.
+                </p>
+                <div className="flex gap-3">
+                  <input type="text" value={employeeName} onChange={(e) => setEmployeeName(e.target.value)}
+                    placeholder="Employee Name"
+                    className="bg-background border border-card-border rounded-lg px-4 py-2.5 flex-1 text-sm focus:outline-none focus:border-accent transition-colors" />
+                  <button onClick={handleOnboard} disabled={!!loading || !employeeName}
+                    className="bg-accent hover:bg-accent-light text-black font-semibold px-6 py-2.5 rounded-lg transition-colors disabled:opacity-50">
+                    Onboard
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-foreground/50 text-sm mb-4">
+                  Add an employee who already has an XRPL wallet. Issues an &quot;employee&quot; credential to their address — they&apos;ll need to accept it.
+                </p>
+                <div className="space-y-3">
+                  <input type="text" value={employeeAddress} onChange={(e) => setEmployeeAddress(e.target.value)}
+                    placeholder="XRPL Address (rXXX...)"
+                    className="bg-background border border-card-border rounded-lg px-4 py-2.5 w-full text-sm font-mono focus:outline-none focus:border-accent transition-colors" />
+                  <div className="flex gap-3">
+                    <input type="text" value={employeeName} onChange={(e) => setEmployeeName(e.target.value)}
+                      placeholder="Name (optional)"
+                      className="bg-background border border-card-border rounded-lg px-4 py-2.5 flex-1 text-sm focus:outline-none focus:border-accent transition-colors" />
+                    <button onClick={handleOnboard} disabled={!!loading || !employeeAddress}
+                      className="bg-accent hover:bg-accent-light text-black font-semibold px-6 py-2.5 rounded-lg transition-colors disabled:opacity-50">
+                      Add Member
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
             {lastOnboardTx && (
               <div className="flex gap-3 mt-3 flex-wrap">
                 {lastOnboardTx.credentialCreate && <TxLink hash={lastOnboardTx.credentialCreate} label="CredentialCreate" />}

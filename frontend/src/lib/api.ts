@@ -93,6 +93,37 @@ export const api = {
     }),
 
   getBalance: (address: string) => request(`/balance/${address}`),
+
+  // XUMM wallet connect
+  xummSignIn: () => request("/auth/xumm", { method: "POST" }),
+  xummStatus: (payloadId: string) => request(`/auth/xumm/${payloadId}`),
+  xummEnabled: async () => {
+    try {
+      const data = await request("/health");
+      return data.xummEnabled === true;
+    } catch { return false; }
+  },
+
+  // Employee auth via on-chain credential
+  authEmployee: (address: string, vaultId: string) =>
+    request("/auth/employee", {
+      method: "POST",
+      body: JSON.stringify({ address, vaultId }),
+    }),
+
+  // Add member by address (no onboard, employer issues credential to existing wallet)
+  addMember: (vaultId: string, employeeAddress: string, employeeName?: string) =>
+    request(`/vault/${vaultId}/member`, {
+      method: "POST",
+      body: JSON.stringify({ employeeAddress, employeeName }),
+    }),
+
+  // Accept credential (employee accepts after being added)
+  acceptCredential: (vaultId: string, employeeSeed: string) =>
+    request(`/vault/${vaultId}/member/accept`, {
+      method: "POST",
+      body: JSON.stringify({ employeeSeed }),
+    }),
 };
 
 export const EXPLORER = (txHash: string) =>
