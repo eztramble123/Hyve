@@ -29,7 +29,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <nav className="sticky top-0 z-50">
+        <nav>
           <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
             {/* Logo */}
             <a href="/" className="flex items-center gap-2 group">
