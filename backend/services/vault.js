@@ -1,7 +1,7 @@
 import { getClient, walletFromSeed, getCreatedNodeId } from "./xrpl-client.js";
 import { rlusdAsset, rlusdAmount, getRLUSDIssuer } from "./rlusd.js";
 
-export async function createVault(ownerSeed) {
+export async function createVault(ownerSeed, options = {}) {
   const c = await getClient();
   const wallet = walletFromSeed(ownerSeed);
 
@@ -9,9 +9,19 @@ export async function createVault(ownerSeed) {
     TransactionType: "VaultCreate",
     Account: wallet.address,
     Asset: rlusdAsset(),
-    AssetsMaximum: "1000000",
+    AssetsMaximum: options.assetsMaximum || "1000000",
     WithdrawalPolicy: 1, // FirstComeFirstServe
   };
+
+  // tfVaultShareNonTransferable — shares can't be traded, only withdrawn through vault
+  if (options.nonTransferable) {
+    tx.Flags = 131072;
+  }
+
+  // Store vault config in Data field (match rate, vesting type)
+  if (options.configData) {
+    tx.Data = Buffer.from(JSON.stringify(options.configData)).toString("hex");
+  }
 
   const prepared = await c.autofill(tx);
   const signed = wallet.sign(prepared);
@@ -83,6 +93,31 @@ export async function getVaultInfo(vaultId) {
     index: vaultId,
   });
   return response.result.node;
+}
+
+export async function getVaultShareBalance(vaultId, holderAddress) {
+  const c = await getClient();
+
+  // Get vault's MPTokenIssuanceID from the vault ledger object
+  const vaultObj = await getVaultInfo(vaultId);
+  const issuanceId = vaultObj.MPTokenIssuanceID;
+  if (!issuanceId) return 0;
+
+  try {
+    const response = await c.request({
+      command: "account_objects",
+      account: holderAddress,
+      type: "mptoken",
+      ledger_index: "validated",
+    });
+
+    const token = response.result.account_objects.find(
+      (obj) => obj.MPTokenIssuanceID === issuanceId
+    );
+    return token ? parseFloat(token.MPTAmount || "0") : 0;
+  } catch {
+    return 0;
+  }
 }
 
 export async function clawbackVaultShares(vaultId, holderAddress, amount) {

@@ -1,6 +1,10 @@
 import xrpl from "xrpl";
 import { getClient, walletFromSeed } from "./xrpl-client.js";
 
+// "RLUSD" is 5 chars — must be hex-encoded to 40-char hex for XRPL
+// ASCII: R=52 L=4C U=55 S=53 D=44, zero-padded to 20 bytes
+const RLUSD_HEX = "524C555344000000000000000000000000000000";
+
 let rlusdIssuer = null;
 
 export async function setupRLUSDIssuer() {
@@ -39,9 +43,13 @@ export function getRLUSDIssuer() {
   return rlusdIssuer;
 }
 
+export function rlusdCurrency() {
+  return RLUSD_HEX;
+}
+
 export function rlusdAmount(value) {
   return {
-    currency: "RLUSD",
+    currency: RLUSD_HEX,
     issuer: rlusdIssuer.address,
     value: String(value),
   };
@@ -49,7 +57,7 @@ export function rlusdAmount(value) {
 
 export function rlusdAsset() {
   return {
-    currency: "RLUSD",
+    currency: RLUSD_HEX,
     issuer: rlusdIssuer.address,
   };
 }
@@ -63,7 +71,7 @@ export async function setupRLUSDTrustLine(userSeed) {
     TransactionType: "TrustSet",
     Account: wallet.address,
     LimitAmount: {
-      currency: "RLUSD",
+      currency: RLUSD_HEX,
       issuer: issuer.address,
       value: "1000000",
     },
@@ -85,7 +93,7 @@ export async function fundWithRLUSD(destinationAddress, amount) {
     Account: issuerWallet.address,
     Destination: destinationAddress,
     DeliverMax: {
-      currency: "RLUSD",
+      currency: RLUSD_HEX,
       issuer: issuer.address,
       value: String(amount),
     },
@@ -109,7 +117,7 @@ export async function getRLUSDBalance(address) {
     });
 
     const rlusdLine = response.result.lines.find(
-      (l) => l.currency === "RLUSD" && l.account === issuer.address
+      (l) => (l.currency === RLUSD_HEX || l.currency === "RLUSD") && l.account === issuer.address
     );
     return rlusdLine ? parseFloat(rlusdLine.balance) : 0;
   } catch {
