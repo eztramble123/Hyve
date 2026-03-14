@@ -136,8 +136,27 @@ export default function EmployerDashboard() {
   const [manualSeed, setManualSeed] = useState("");
   const [xummAddress, setXummAddress] = useState<string | null>(null); // address verified via XUMM, awaiting seed
 
+  // Restore session from localStorage
   useEffect(() => {
     api.xummEnabled().then(setXummAvailable);
+    try {
+      const savedSeed = localStorage.getItem("hyve_employer_seed");
+      const savedVaultId = localStorage.getItem("hyve_employer_vault_id");
+      if (savedSeed && savedVaultId) {
+        setEmployer({ address: "", seed: savedSeed });
+        setLoading("Restoring your vault...");
+        api.init().then(() => api.getVault(savedVaultId)).then((vaultData) => {
+          setVault(vaultData);
+          setLoading("");
+        }).catch(() => {
+          // Vault not found in backend — clear saved state
+          localStorage.removeItem("hyve_employer_seed");
+          localStorage.removeItem("hyve_employer_vault_id");
+          setEmployer(null);
+          setLoading("");
+        });
+      }
+    } catch {}
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
@@ -226,6 +245,11 @@ export default function EmployerDashboard() {
       setVaultTxHashes(result.txHashes);
       const vaultData = await api.getVault(result.vaultId);
       setVault(vaultData);
+      // Persist session
+      try {
+        localStorage.setItem("hyve_employer_seed", employer.seed);
+        localStorage.setItem("hyve_employer_vault_id", result.vaultId);
+      } catch {}
       setLoading("");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Vault creation failed");
@@ -308,9 +332,27 @@ export default function EmployerDashboard() {
     setVault(updated);
   }
 
+  function handleDisconnect() {
+    try {
+      localStorage.removeItem("hyve_employer_seed");
+      localStorage.removeItem("hyve_employer_vault_id");
+    } catch {}
+    setEmployer(null);
+    setVault(null);
+    setVaultTxHashes(null);
+    setError("");
+  }
+
   return (
     <div>
-      <h1 className="text-3xl font-bold mb-2">Employer Dashboard</h1>
+      <div className="flex items-center justify-between mb-2">
+        <h1 className="text-3xl font-bold">Employer Dashboard</h1>
+        {vault && (
+          <button onClick={handleDisconnect} className="text-sm text-foreground/30 hover:text-foreground/60 transition-colors">
+            Disconnect
+          </button>
+        )}
+      </div>
       <p className="text-foreground/50 text-sm mb-6">Set up a savings vault for your team. Employees deposit, you match, they borrow at fair rates.</p>
 
       {loading && <Spinner text={loading} />}
